@@ -1,8 +1,3 @@
-//create own named pipe (fifo) and set permissions
-//send this fifo name to server
-//open own named pipe
-//read the quote and display
-
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -10,62 +5,79 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <signal.h>
+#include <pthread.h>
 
-#define MAXLEN 1000
+#define MAX_LEN 1000
+
+// Function to read messages from the server
+void *read_server(void *ptr) {
+    FILE *client_fifo = ptr;
+    char line[MAX_LEN];
+    while (1) {
+        if (!fgets(line, MAX_LEN, client_fifo)) {
+            break;
+        }
+        printf("%s", line);
+    }
+}
+
+// Function to write messages to the server
+void *write_server(void *ptr) {
+    FILE *server_fifo = ptr;
+    while (1) {
+        char response[MAX_LEN];
+        fgets(response, MAX_LEN, stdin);
+        fprintf(server_fifo, "%s", response);
+        fflush(server_fifo);
+    }
+}
 
 int main(int argc, char *argv[]) {
-        if (argc !=2) {
-                puts("Usage: qclient <server-fifo-name>");
-                exit(1);
-        }
+    // Check if correct number of arguments is provided
+    if (argc != 3) {
+        puts("Usage: imclient <server-fifo-name> username");
+        exit(1);
+    }
 
-        // argv[1] is the server fifo name
+    // Create client FIFO
+    char client_fifo[MAX_LEN];
+    sprintf(client_fifo, "/tmp/%s-%d", getenv("USER"), getpid());
+    mkfifo(client_fifo, 0600);
+    chmod(client_fifo, 0622);
 
-    char clientfifo[MAXLEN];
-        sprintf(clientfifo, "/tmp/%s-%d", getenv("USER"), getpid());
-        mkfifo(clientfifo, 0600);
-        chmod(clientfifo, 0622);
+    // Open server FIFO for writing, and send client FIFO details
+    FILE *server_fifo = fopen(argv[1], "w");
+    fprintf(server_fifo, "%s %s\n", client_fifo, argv[2]);
+    fclose(server_fifo);
 
-        //open argv[1] for writing, send clientfifo
-        FILE *fp = fopen(argv[1], "w");
+    // Open client FIFO for reading
+    FILE *client_fifo_fp = fopen(client_fifo, "r");
 
-        //fputs(clientfifo, fp);
-        //add \n after clientfifo to avoid potential race conditions in server
-        fprintf(fp, "%s\n", clientfifo);
-        fclose(fp);
+     // Read server FIFO details from client FIFO
+    char server_fifo_name[MAX_LEN];
+    fscanf(client_fifo_fp, "%s", server_fifo_name);
+    char line[MAX_LEN];
+    fgets(line, MAX_LEN, client_fifo_fp);
 
-        //open clientfifo for reading and read the quote & print in the screen - improve your life! :-)
-        FILE *clientfp = fopen(clientfifo, "r");
-        //read the new server-fifo, then open it for writing! as serverfp
-        char serverfifo[MAXLEN];
-        //fgets(serverfifo, clientfp); -- fscanf() is better! No need to worry about \n
-        fscanf(clientfp, "%s", serverfifo);
-        char line[MAXLEN];
-        fgets(line, MAXLEN, clientfp); //get rid of \n
+    // Open server FIFO for writing
+    FILE *server_fifo_fp = fopen(server_fifo_name, "w");
 
-        FILE *serverfp = fopen(serverfifo, "w");
-        //loop:
-        //  read user input
-        //  send it to server
-        //  get the quote
-        //  display
-        while (1) {
-                int reqQuote = 0;
-                printf("Enter quote # you want: ");
-                scanf("%d", &reqQuote);
+    // Create threads for reading and writing messages
+    pthread_t read_thread;
+    pthread_t write_thread;
 
-                //send the quote # to server
-                fprintf(serverfp, "%d\n", reqQuote);
-                fflush(serverfp);
-                //read the response (quote) from the server
-                fgets(line, MAXLEN, clientfp);
-                puts(line);
-        }
+    pthread_create(&read_thread, NULL, read_server, (void *)client_fifo_fp);
+    pthread_create(&write_thread, NULL, write_server, (void *)server_fifo_fp);
 
-        fclose(clientfp);
+    // Wait for threads to finish (infinite loop)
+    while (1) {}
 
-        unlink(clientfifo);
+    // Close client FIFO and unlink it
+    fclose(client_fifo_fp);
+    unlink(client_fifo);
+
+    return 0;
 }
-                     
 
-
+           
